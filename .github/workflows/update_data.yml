@@ -2,8 +2,8 @@ name: Update Steph Curry Data Weekly
 
 on:
   schedule:
-    - cron: '0 13 * * 0'   # Every Sunday at 9 AM ET (13:00 UTC)
-  workflow_dispatch:        # Allow manual run from GitHub Actions tab
+    - cron: '0 13 * * 0'   # Every Sunday at 9 AM ET
+  workflow_dispatch:        # Allow manual runs
 
 jobs:
   refresh-data:
@@ -24,7 +24,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: 🚀 Run ETL pipeline
-        run: python ./etl/pipeline.py
+        run: python etl/pipeline.py
 
       - name: 💾 Commit and push updated data
         env:
@@ -35,3 +35,4 @@ jobs:
           git add data/season_2025_26_games.csv data/db.sqlite data/LAST_UPDATED.txt || true
           git commit -m "🔁 Weekly data update: $(date)" || echo "No new data to commit"
           git push
+
