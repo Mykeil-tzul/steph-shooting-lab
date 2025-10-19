@@ -106,17 +106,31 @@ st.dataframe(games, use_container_width=True)
 
 import altair as alt
 
-st.subheader("📈 3PM by Game")
-chart = (
-    alt.Chart(games)
-    .mark_bar(color="#FDB927")
-    .encode(
-        x=alt.X("GAME_DATE:T", title="Game Date"),
-        y=alt.Y("FG3M:Q", title="3PM"),
-        tooltip=["MATCHUP", "FG3M", "FG3A", "PTS", "WL"]
+# Ensure data is loaded and cleaned
+try:
+    df = pd.read_sql("SELECT game_date, fg3m FROM games_2025_26 ORDER BY game_date ASC", engine)
+    df['game_date'] = pd.to_datetime(df['game_date'])
+except Exception as e:
+    st.error(f"⚠️ Error loading chart data: {e}")
+    st.stop()
+
+if df.empty:
+    st.warning("No data available to display right now.")
+else:
+    st.subheader("📊 3PM by Game")
+
+    chart = (
+        alt.Chart(df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("game_date:T", title="Game Date"),
+            y=alt.Y("fg3m:Q", title="3-Point Makes"),
+            tooltip=["game_date", "fg3m"]
+        )
+        .properties(height=350)
     )
-)
-st.altair_chart(chart, use_container_width=True)
+
+    st.altair_chart(chart, use_container_width=True)
 
 # ============================================================
 # 🏁 FOOTER
