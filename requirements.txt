@@ -1,0 +1,6 @@
+pandas
+requests
+nba_api
+sqlalchemy
+streamlit
+altair
