@@ -24,8 +24,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: 🚀 Run ETL pipeline
-        working-directory: ./
-        run: python etl/pipeline.py
+        run: python ./etl/pipeline.py
 
       - name: 💾 Commit and push updated data
         env:
