@@ -1,141 +1,87 @@
-import os, time
+import os
 import pandas as pd
-from datetime import datetime
-from dateutil import parser as dtp
-from nba_api.stats.static import players
 from nba_api.stats.endpoints import playergamelog
+from datetime import datetime
 from sqlalchemy import create_engine
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+# ======================================================
+# CONFIG
+# ======================================================
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "db.sqlite")
 CSV_PATH = os.path.join(DATA_DIR, "season_2025_26_games.csv")
 LAST_UPDATED_PATH = os.path.join(DATA_DIR, "LAST_UPDATED.txt")
+PLAYERS_PATH = os.path.join(DATA_DIR, "players.csv")
+SEED_PATH = os.path.join(DATA_DIR, "seed_alltime_3pm.csv")
 
-PLAYER_NAME = "Stephen Curry"
-SEASON = "2024-25"   # NBA API format (e.g., 2024-25)
+PLAYER_ID = 201939  # Steph Curry
+SEASON = "2024-25"
 TABLE = "games_2025_26"
 
-# ============================================================
-# 1. GET PLAYER ID
-# ============================================================
-def get_player_id(name: str) -> int:
-    plist = players.get_players()
-    pid = [p["id"] for p in plist if p["full_name"] == name]
-    if not pid:
-        raise ValueError(f"Player {name} not found.")
-    return pid[0]
+# ======================================================
+# FUNCTIONS
+# ======================================================
 
-# ============================================================
-# 2. FETCH GAME LOG DATA
-# ============================================================
-def fetch_gamelog(player_id: int, season: str) -> pd.DataFrame:
-    """
-    Calls the NBA Stats API for the player's game logs for a given season.
-    Retries up to 4 times if network or rate-limit issues occur.
-    """
-    err = None
-    for i in range(4):
-        try:
-            gl = playergamelog.PlayerGameLog(player_id=player_id, season=season, timeout=60)
-            df = gl.get_data_frames()[0]
-            print(f"✅ Successfully fetched {len(df)} games for {PLAYER_NAME}")
-            return df
-        except Exception as e:
-            err = e
-            print(f"Retry {i+1} failed: {e}")
-            time.sleep(3 * (i + 1))
-    raise err
+def fetch_player_game_logs(player_id: int, season: str) -> pd.DataFrame:
+    """Fetch all game logs for the given player & season."""
+    print(f"📡 Fetching game logs for player {player_id} ({season})...")
+    gamelog = playergamelog.PlayerGameLog(player_id=player_id, season=season)
+    df = gamelog.get_data_frames()[0]
+    print(f"✅ Retrieved {len(df)} games.")
+    return df
 
-# ============================================================
-# 3. CLEAN / NORMALIZE COLUMNS
-# ============================================================
+
 def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cleans and standardizes the NBA API output columns.
-    Auto-handles any naming mismatches between seasons.
-    """
-    # Standardize column names to uppercase
-    df.columns = [c.upper() for c in df.columns]
+    """Keep and rename key columns."""
+    keep = ["GAME_DATE", "MATCHUP", "WL", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "PTS"]
+    df = df[keep].copy()
+    df.columns = [c.lower() for c in df.columns]
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    return df
 
-    expected = [
-        "GAME_ID","GAME_DATE","MATCHUP","WL","MIN",
-        "FGM","FGA","FG3M","FG3A","FTM","FTA","PTS","PLUS_MINUS"
-    ]
 
-    # Fill in any missing expected columns with blanks
-    missing = [c for c in expected if c not in df.columns]
-    if missing:
-        print(f"⚠️ Warning: Missing columns {missing} — filling with default values.")
-        for c in missing:
-            df[c] = None
+def save_sqlite(df: pd.DataFrame, table: str):
+    """Save cleaned data to SQLite."""
+    engine = create_engine(f"sqlite:///{DB_PATH}")
+    df.to_sql(table, engine, if_exists="replace", index=False)
+    print(f"💾 Saved {len(df)} records to {table} in SQLite.")
 
-    # Keep only expected columns
-    df = df[expected].copy()
 
-    # Convert and add derived fields
-    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
-    df["SEASON"] = SEASON
+def save_csv_snapshot(df: pd.DataFrame):
+    """Save a CSV snapshot of the season."""
+    df.to_csv(CSV_PATH, index=False)
+    print(f"📂 Snapshot saved to {CSV_PATH}")
 
-    df["FG_PCT"] = (df["FGM"] / df["FGA"]).fillna(0).replace([float("inf")], 0)
-    df["FG3_PCT"] = (df["FG3M"] / df["FG3A"]).fillna(0).replace([float("inf")], 0)
-    df["FT_PCT"] = (df["FTM"] / df["FTA"]).fillna(0).replace([float("inf")], 0)
 
-    return df.sort_values("GAME_DATE")
-
-# ============================================================
-# 4. LOAD TO SQLITE DATABASE
-# ============================================================
-def load_sqlite(df: pd.DataFrame):
-    """
-    Stores the cleaned game log data in a local SQLite database.
-    Deduplicates rows by GAME_ID each run.
-    """
-    os.makedirs(DATA_DIR, exist_ok=True)
-    eng = create_engine(f"sqlite:///{DB_PATH}")
-
-    try:
-        existing = pd.read_sql_table(TABLE, eng)
-    except Exception:
-        existing = pd.DataFrame(columns=df.columns)
-
-    all_df = pd.concat([existing, df], ignore_index=True)
-    all_df = all_df.drop_duplicates(subset=["GAME_ID"], keep="last")
-    all_df.to_sql(TABLE, eng, if_exists="replace", index=False)
-
-# ============================================================
-# 5. SAVE SNAPSHOT CSV
-# ============================================================
-def save_csv_snapshot():
-    eng = create_engine(f"sqlite:///{DB_PATH}")
-    snap = pd.read_sql(f"SELECT * FROM {TABLE} ORDER BY GAME_DATE", eng)
-    snap.to_csv(CSV_PATH, index=False)
-    print(f"💾 Saved snapshot to {CSV_PATH}")
-
-# ============================================================
-# 6. UPDATE LAST UPDATED TIMESTAMP
-# ============================================================
 def update_last_updated():
+    """Update timestamp text file."""
     with open(LAST_UPDATED_PATH, "w") as f:
         f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    print("🕒 Updated timestamp.")
 
-# ============================================================
-# 7. MAIN EXECUTION PIPELINE
-# ============================================================
+
+# ======================================================
+# MAIN
+# ======================================================
+
 def main():
-    print(f"🚀 Starting ETL for {PLAYER_NAME} ({SEASON})")
-    pid = get_player_id(PLAYER_NAME)
-    raw = fetch_gamelog(pid, SEASON)
-    clean = normalize_cols(raw)
-    load_sqlite(clean)
-    save_csv_snapshot()
-    update_last_updated()
-    print(f"✅ Pipeline complete — {len(clean)} games processed.")
+    print(f"\n🚀 Starting ETL for Steph Curry ({SEASON})\n")
 
-# ============================================================
-# RUN SCRIPT
-# ============================================================
+    # Fetch data
+    raw = fetch_player_game_logs(PLAYER_ID, SEASON)
+    if raw.empty:
+        print("⚠️ No games found. Skipping save.")
+        return
+
+    clean = normalize_cols(raw)
+    save_sqlite(clean, TABLE)
+    save_csv_snapshot(clean)
+    update_last_updated()
+
+    print(f"\n✅ Pipeline complete — {len(clean)} games processed.\n")
+
+
 if __name__ == "__main__":
     main()
